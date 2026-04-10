@@ -1,0 +1,217 @@
+<sh-sidenav class="simple" [(isOpen)]="isNavOpen" [disableDrag]="true">
+  <div sidenav>
+    <header>
+      <app-logo />
+
+      <button shButton class="icon small" (click)="toggleBodyClass()">
+        @if (isDarkMode()) {
+          <sh-icon>sun</sh-icon>
+        } @else {
+          <sh-icon>moon</sh-icon>
+        }
+      </button>
+    </header>
+
+    <sh-list class="primary">
+      <a routerLink="/chat" action>
+        <sh-icon>chat-circle</sh-icon>
+        Chat
+      </a>
+      <a routerLink="/admin" action class="active">
+        <sh-icon>gear</sh-icon>
+        Admin
+      </a>
+    </sh-list>
+
+    <sh-list class="base-1l primary" style="margin-top: auto;">
+      <sh-divider />
+      <button action (click)="authService.logout()">
+        <sh-icon>sign-out</sh-icon>
+        Sign out
+      </button>
+    </sh-list>
+  </div>
+
+  <div class="admin-container">
+    <div class="admin-content">
+      <div class="admin-header">
+        <h1>Backup Sources</h1>
+        <button shButton class="primary raised" (click)="showAddForm.set(!showAddForm())">
+          <sh-icon>plus</sh-icon>
+          {{ showAddForm() ? 'Cancel' : 'Add Source' }}
+        </button>
+      </div>
+
+      @if (success()) {
+        <sh-alert color="success" variant="outlined" class="status-alert">
+          {{ success() }}
+        </sh-alert>
+      }
+
+      @if (error()) {
+        <sh-alert color="error" variant="outlined" class="status-alert">
+          {{ error() }}
+        </sh-alert>
+      }
+
+      @if (showAddForm()) {
+        <sh-card class="add-form-card">
+          <h3>Add Backup Source</h3>
+          <form (ngSubmit)="addSource()" class="add-form">
+            <sh-form-field label="Name">
+              <input
+                type="text"
+                [ngModel]="formName()"
+                (ngModelChange)="formName.set($event)"
+                name="name"
+                placeholder="My Backup"
+                required
+              />
+            </sh-form-field>
+
+            <sh-form-field label="Duplicati Backup ID">
+              <input
+                type="text"
+                [ngModel]="formBackupId()"
+                (ngModelChange)="formBackupId.set($event)"
+                name="backupId"
+                placeholder="backup-1"
+                required
+              />
+            </sh-form-field>
+
+            <sh-form-field label="Target URL">
+              <input
+                type="text"
+                [ngModel]="formTargetUrl()"
+                (ngModelChange)="formTargetUrl.set($event)"
+                name="targetUrl"
+                placeholder="file:///backupdest or s3://bucket/path"
+              />
+            </sh-form-field>
+
+            <sh-form-field label="Encryption Password (optional)">
+              <input
+                type="password"
+                [ngModel]="formPassword()"
+                (ngModelChange)="formPassword.set($event)"
+                name="password"
+                placeholder="Leave empty if unencrypted"
+              />
+            </sh-form-field>
+
+            <div class="form-actions">
+              <button
+                shButton
+                class="primary raised"
+                type="submit"
+                [disabled]="isSubmitting() || !formName().trim() || !formBackupId().trim()"
+              >
+                {{ isSubmitting() ? 'Creating...' : 'Create' }}
+              </button>
+              <button shButton class="outline" type="button" (click)="showAddForm.set(false)">
+                Cancel
+              </button>
+            </div>
+          </form>
+        </sh-card>
+      }
+
+      @if (isLoading()) {
+        <div class="loading-container">
+          <sh-spinner></sh-spinner>
+          <span>Loading backup sources...</span>
+        </div>
+      } @else if (sources().length === 0) {
+        <sh-card class="empty-state">
+          <sh-icon>database</sh-icon>
+          <p>No backup sources configured yet.</p>
+          <button shButton class="primary outline" (click)="showAddForm.set(true)">
+            Add your first backup source
+          </button>
+        </sh-card>
+      } @else {
+        <div class="sources-list">
+          @for (source of sources(); track source.id) {
+            <sh-card class="source-card">
+              <div class="source-header">
+                <div class="source-info">
+                  <h3>{{ source.name }}</h3>
+                  <span class="source-id">{{ source.duplicatiBackupId }}</span>
+                </div>
+                <div class="source-status">
+                  @if (source.isPaused) {
+                    <sh-alert color="warning" variant="outlined" class="status-badge">
+                      Paused
+                    </sh-alert>
+                  }
+                </div>
+              </div>
+
+              <div class="source-details">
+                @if (source.targetUrl) {
+                  <div class="detail-row">
+                    <span class="detail-label">Target:</span>
+                    <code class="detail-value">{{ source.targetUrl }}</code>
+                  </div>
+                }
+                <div class="detail-row">
+                  <span class="detail-label">Created:</span>
+                  <span class="detail-value">{{ source.createdAt | date:'medium' }}</span>
+                </div>
+                @if (source.lastParsedVersion) {
+                  <div class="detail-row">
+                    <span class="detail-label">Last indexed:</span>
+                    <span class="detail-value">{{ source.lastParsedVersion | date:'medium' }}</span>
+                  </div>
+                }
+              </div>
+
+              <div class="source-actions">
+                <button
+                  shButton
+                  class="primary outline small"
+                  (click)="toggleIndexForm(source.id)"
+                >
+                  <sh-icon>arrow-clockwise</sh-icon>
+                  Index
+                </button>
+                <button
+                  shButton
+                  class="error outline small"
+                  (click)="deleteSource(source)"
+                >
+                  <sh-icon>trash</sh-icon>
+                  Delete
+                </button>
+              </div>
+
+              @if (indexSourceId() === source.id) {
+                <div class="index-form">
+                  <sh-divider />
+                  <sh-form-field label="Dlist Filename">
+                    <input
+                      type="text"
+                      [ngModel]="indexDlistFilename()"
+                      (ngModelChange)="indexDlistFilename.set($event)"
+                      name="dlistFilename"
+                      placeholder="duplicati-20240312T143000Z.dlist.zip.aes"
+                    />
+                  </sh-form-field>
+                  <button
+                    shButton
+                    class="primary raised small"
+                    (click)="triggerIndex(source)"
+                    [disabled]="isIndexing() || !indexDlistFilename().trim()"
+                  >
+                    {{ isIndexing() ? 'Triggering...' : 'Trigger Indexing' }}
+                  </button>
+                </div>
+              }
+            </sh-card>
+          }
+        </div>
+      }
+    </div>
+  </div>
+</sh-sidenav>

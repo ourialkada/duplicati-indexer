@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { timeout } from 'rxjs/operators';
+import { AuthService } from './auth.service';
 
 export interface RagQueryRequest {
   query: string;
@@ -51,6 +52,7 @@ export interface SessionDetailsResponse {
 })
 export class QueryService {
   private http = inject(HttpClient);
+  private authService = inject(AuthService);
   private readonly apiUrl = '/api/rag/query';
   // 5 minute timeout to accommodate slow local LLM models
   private readonly requestTimeoutMs = 300000;
@@ -73,12 +75,18 @@ export class QueryService {
     return new Observable<RagQueryEvent>(observer => {
       const abortController = new AbortController();
 
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream'
+      };
+      const token = this.authService.getToken();
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       fetch(this.apiUrl + '/stream', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream'
-        },
+        headers,
         body: JSON.stringify(request),
         signal: abortController.signal
       }).then(async response => {

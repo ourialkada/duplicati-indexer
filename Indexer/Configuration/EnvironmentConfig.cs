@@ -97,6 +97,11 @@ public class EnvironmentConfig
     public SecurityConfig Security { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets the authentication configuration.
+    /// </summary>
+    public AuthConfig Auth { get; set; } = new();
+
+    /// <summary>
     /// Connection strings configuration.
     /// </summary>
     public class ConnectionStringsConfig
@@ -320,5 +325,29 @@ public class EnvironmentConfig
         /// Environment variable: SECURITY__THREATMONITOR
         /// </summary>
         public string ThreatMonitor { get; set; } = "noop";
+    }
+
+    /// <summary>
+    /// Authentication configuration.
+    /// </summary>
+    public class AuthConfig
+    {
+        /// <summary>
+        /// Admin password for authentication.
+        /// Environment variable: AUTH__PASSWORD
+        /// </summary>
+        public string Password { get; set; } = string.Empty;
+
+        /// <summary>
+        /// JWT signing secret. Auto-generated at startup if not set.
+        /// Environment variable: AUTH__JWTSECRET
+        /// </summary>
+        public string JwtSecret { get; set; } = string.Empty;
+
+        /// <summary>
+        /// JWT token expiration in hours.
+        /// Environment variable: AUTH__TOKENEXPIRATIONHOURS
+        /// </summary>
+        public int TokenExpirationHours { get; set; } = 24;
     }
 }

@@ -37,6 +37,16 @@
     <sh-list class="base-1l primary">
       <sh-divider />
 
+      <a routerLink="/admin" action>
+        <sh-icon>gear</sh-icon>
+        Admin
+      </a>
+
+      <button action (click)="authService.logout()">
+        <sh-icon>sign-out</sh-icon>
+        Sign out
+      </button>
+
       <a href="https://github.com/duplicati/duplicati" target="_blank" action>
         <sh-icon>info</sh-icon>
         About Indexer
@@ -48,7 +58,7 @@
     <div class="main-content" [class.has-response]="hasSubmitted()">
       @if (!hasSubmitted()) {
         <header class="header">
-          <h1 class="title">What can I helps you with?</h1>
+          <h1 class="title">What can I help you with?</h1>
         </header>
       }
 

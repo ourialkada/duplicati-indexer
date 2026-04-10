@@ -26,7 +26,13 @@ using Qdrant.Client;
 using Serilog;
 using Wolverine;
 using Wolverine.Postgresql;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.IdentityModel.Tokens.Jwt;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Security.Claims;
 
 static async Task EnsureIndexedContentTableAsync(string connectionString, Serilog.ILogger logger)
 {
@@ -328,6 +334,30 @@ else
     healthChecks.AddCheck<QdrantHealthCheck>("qdrant");
 }
 
+// Configure Authentication
+var jwtSecret = environmentConfig.Auth.JwtSecret;
+if (string.IsNullOrEmpty(jwtSecret))
+{
+    jwtSecret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+    Log.Warning("AUTH__JWTSECRET not configured. Generated a random secret — tokens will not survive restarts.");
+}
+var jwtKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = jwtKey,
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
+    });
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
 // Ensure Marten database schema is created on startup
@@ -341,7 +371,35 @@ using (var scope = app.Services.CreateScope())
 // Map health check endpoint
 app.MapHealthChecks("/health");
 
-// TODO: Add authentication and authorization to these endpoints
+// Authentication and authorization middleware
+app.UseAuthentication();
+app.UseAuthorization();
+
+// Login endpoint (anonymous)
+app.MapPost("/api/auth/login", (LoginRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Password))
+        return Results.BadRequest(new { error = "Password is required" });
+
+    var configuredPassword = environmentConfig.Auth.Password;
+    if (string.IsNullOrEmpty(configuredPassword))
+        return Results.StatusCode(503);
+
+    var requestBytes = Encoding.UTF8.GetBytes(request.Password);
+    var configBytes = Encoding.UTF8.GetBytes(configuredPassword);
+    if (!CryptographicOperations.FixedTimeEquals(requestBytes, configBytes))
+        return Results.Unauthorized();
+
+    var tokenHandler = new JwtSecurityTokenHandler();
+    var tokenDescriptor = new SecurityTokenDescriptor
+    {
+        Subject = new ClaimsIdentity([new Claim(ClaimTypes.Role, "admin")]),
+        Expires = DateTime.UtcNow.AddHours(environmentConfig.Auth.TokenExpirationHours),
+        SigningCredentials = new SigningCredentials(jwtKey, SecurityAlgorithms.HmacSha256Signature)
+    };
+    var token = tokenHandler.CreateToken(tokenDescriptor);
+    return Results.Ok(new { token = tokenHandler.WriteToken(token) });
+}).AllowAnonymous();
 
 // API endpoint to inject a BackupVersionCreated message via Wolverine
 app.MapPost("/api/messages/backup-version-created", async (BackupVersionCreated message, IMessageBus bus) =>
@@ -363,7 +421,7 @@ app.MapPost("/api/messages/backup-version-created", async (BackupVersionCreated 
         backupId = message.BackupId,
         dlistFilename = message.DlistFilename
     });
-});
+}).RequireAuthorization();
 
 // API endpoint to inject a BackupSource directly into Marten
 app.MapPost("/api/backup-sources", async (CreateBackupSourceRequest request, IDocumentSession session) =>
@@ -392,7 +450,28 @@ app.MapPost("/api/backup-sources", async (CreateBackupSourceRequest request, IDo
         backupSource.Id, backupSource.Name, backupSource.DuplicatiBackupId);
 
     return Results.Created($"/api/backup-sources/{backupSource.Id}", backupSource);
-});
+}).RequireAuthorization();
+
+// API endpoint to list all backup sources
+app.MapGet("/api/backup-sources", async (IQuerySession session) =>
+{
+    var sources = await session.Query<BackupSource>().ToListAsync();
+    return Results.Ok(sources);
+}).RequireAuthorization();
+
+// API endpoint to delete a backup source
+app.MapDelete("/api/backup-sources/{id:guid}", async (Guid id, IDocumentSession session) =>
+{
+    var existing = await session.LoadAsync<BackupSource>(id);
+    if (existing == null)
+        return Results.NotFound(new { error = "Backup source not found" });
+
+    session.Delete(existing);
+    await session.SaveChangesAsync();
+
+    Log.Information("Deleted BackupSource: Id={Id}, Name={Name}", existing.Id, existing.Name);
+    return Results.NoContent();
+}).RequireAuthorization();
 
 // API endpoint to execute RAG queries (uses configured version: V1 or V2)
 app.MapPost("/api/rag/query", async (RagQueryRequest request, IRagQueryService ragQueryService, RagQuerySessionService sessionService, CancellationToken cancellationToken) =>
@@ -429,7 +508,7 @@ app.MapPost("/api/rag/query", async (RagQueryRequest request, IRagQueryService r
         result.SessionId,
         result.Answer,
         result.IsNewSession));
-});
+}).RequireAuthorization();
 
 // API endpoint to get all sessions
 app.MapGet("/api/rag/sessions", async (RagQuerySessionService sessionService, CancellationToken cancellationToken) =>
@@ -442,7 +521,7 @@ app.MapGet("/api/rag/sessions", async (RagQuerySessionService sessionService, Ca
         s.CreatedAt,
         s.LastActivityAt
     }));
-});
+}).RequireAuthorization();
 
 // API endpoint to get session history
 app.MapGet("/api/rag/sessions/{sessionId:guid}", async (Guid sessionId, RagQuerySessionService sessionService, CancellationToken cancellationToken) =>
@@ -466,7 +545,7 @@ app.MapGet("/api/rag/sessions/{sessionId:guid}", async (Guid sessionId, RagQuery
             h.QueryTimestamp,
             h.ResponseTimestamp,
             h.Events)).ToList()));
-});
+}).RequireAuthorization();
 
 // API endpoint to execute RAG queries using ReAct pattern (V2)
 app.MapPost("/api/rag/v2/query", async (RagQueryRequest request, ReActQueryService ragQueryServiceV2, RagQuerySessionService sessionService, CancellationToken cancellationToken) =>
@@ -503,7 +582,7 @@ app.MapPost("/api/rag/v2/query", async (RagQueryRequest request, ReActQueryServi
         result.SessionId,
         result.Answer,
         result.IsNewSession));
-});
+}).RequireAuthorization();
 
 // API endpoint to execute RAG queries with Server-Sent Events (SSE) streaming progress over POST
 app.MapPost("/api/rag/query/stream", async (RagQueryRequest request, IRagQueryService ragQueryService, RagQuerySessionService sessionService, HttpContext context, CancellationToken cancellationToken) =>
@@ -570,7 +649,7 @@ app.MapPost("/api/rag/query/stream", async (RagQueryRequest request, IRagQuerySe
     var finalJson = JsonSerializer.Serialize(finalEvent, jsonOptions);
     await context.Response.WriteAsync($"data: {finalJson}\n\n");
     await context.Response.Body.FlushAsync();
-});
+}).RequireAuthorization();
 
 // API endpoint to get session history for V2 sessions
 app.MapGet("/api/rag/v2/sessions/{sessionId:guid}", async (Guid sessionId, RagQuerySessionService sessionService, CancellationToken cancellationToken) =>
@@ -594,7 +673,7 @@ app.MapGet("/api/rag/v2/sessions/{sessionId:guid}", async (Guid sessionId, RagQu
             h.QueryTimestamp,
             h.ResponseTimestamp,
             h.Events)).ToList()));
-});
+}).RequireAuthorization();
 
 // API endpoints for file metadata queries
 // Find a file by path pattern (supports wildcards * and ?)
@@ -609,7 +688,7 @@ app.MapGet("/api/files/find", async (string path, Guid? backupSourceId, IFileMet
         return Results.NotFound(new { error = $"No file found matching pattern '{path}'" });
 
     return Results.Ok(result);
-});
+}).RequireAuthorization();
 
 // Get version history for a specific file
 app.MapGet("/api/files/history", async (string path, Guid? backupSourceId, int? limit, IFileMetadataQueryService queryService, CancellationToken cancellationToken) =>
@@ -620,7 +699,7 @@ app.MapGet("/api/files/history", async (string path, Guid? backupSourceId, int? 
     var history = await queryService.GetFileVersionHistoryAsync(path, backupSourceId, limit ?? 20, cancellationToken);
 
     return Results.Ok(new FileHistoryResponse(path, history));
-});
+}).RequireAuthorization();
 
 // Search files by name pattern
 app.MapGet("/api/files/search", async (string pattern, Guid? backupSourceId, int? limit, IFileMetadataQueryService queryService, CancellationToken cancellationToken) =>
@@ -631,7 +710,7 @@ app.MapGet("/api/files/search", async (string pattern, Guid? backupSourceId, int
     var results = await queryService.SearchFilesAsync(pattern, backupSourceId, limit ?? 50, cancellationToken);
 
     return Results.Ok(new FileSearchResponse(pattern, results.Count, results));
-});
+}).RequireAuthorization();
 
 // List files in a directory
 app.MapGet("/api/files/list", async (string directory, Guid? backupSourceId, bool? recursive, IFileMetadataQueryService queryService, CancellationToken cancellationToken) =>
@@ -642,7 +721,7 @@ app.MapGet("/api/files/list", async (string directory, Guid? backupSourceId, boo
     var results = await queryService.ListDirectoryAsync(directory, backupSourceId, recursive ?? false, cancellationToken);
 
     return Results.Ok(new FileListResponse(directory, recursive ?? false, results.Count, results));
-});
+}).RequireAuthorization();
 
 // Get files modified between dates
 app.MapGet("/api/files/modified-between", async (DateTimeOffset start, DateTimeOffset end, Guid? backupSourceId, int? limit, IFileMetadataQueryService queryService, CancellationToken cancellationToken) =>
@@ -653,7 +732,7 @@ app.MapGet("/api/files/modified-between", async (DateTimeOffset start, DateTimeO
     var results = await queryService.GetFilesModifiedBetweenAsync(start, end, backupSourceId, limit ?? 100, cancellationToken);
 
     return Results.Ok(new FilesModifiedResponse(start, end, results.Count, results));
-});
+}).RequireAuthorization();
 
 // API endpoint for RRF hybrid search (OpenClaw integration)
 app.MapPost("/api/search/rrf", async (RrfSearchRequest request, IHybridSearchService hybridSearchService, CancellationToken cancellationToken) =>
@@ -685,7 +764,7 @@ app.MapPost("/api/search/rrf", async (RrfSearchRequest request, IHybridSearchSer
             r.Rank,
             r.Source,
             r.Metadata)).ToList()));
-});
+}).RequireAuthorization();
 
 // API endpoint for searching indexed file paths (OpenClaw integration)
 app.MapPost("/api/search/paths", async (PathSearchRequest request, IFileMetadataQueryService queryService, CancellationToken cancellationToken) =>
@@ -714,9 +793,12 @@ app.MapPost("/api/search/paths", async (PathSearchRequest request, IFileMetadata
             r.BackupSourceName,
             r.IsIndexed,
             r.VersionAdded)).ToList()));
-});
+}).RequireAuthorization();
 
 app.Run();
+
+// Request DTO for login
+public record LoginRequest(string Password);
 
 // Request DTO for creating a BackupSource
 public record CreateBackupSourceRequest(

@@ -1,0 +1,20 @@
+<Solution>
+  <Folder Name="/AdapterInterfaces/">
+    <Project Path="AdapterInterfaces/AdapterInterfaces.csproj" />
+  </Folder>
+  <Folder Name="/Adapters/">
+    <Project Path="ClaudeAdapter/ClaudeAdapter.csproj" />
+    <Project Path="GeminiAdapter/GeminiAdapter.csproj" />
+    <Project Path="ChatGPTAdapter/ChatGPTAdapter.csproj" />
+    <Project Path="OllamaAdapter/OllamaAdapter.csproj" />
+    <Project Path="UnstructuredAdapter/UnstructuredAdapter.csproj" />
+    <Project Path="MarkItDownAdapter/MarkItDownAdapter.csproj" />
+    <Project Path="QdrantAdapter/QdrantAdapter.csproj" />
+    <Project Path="ChromaAdapter/ChromaAdapter.csproj" />
+  </Folder>
+  <Folder Name="/Indexer/">
+    <Project Path="Indexer/DuplicatiIndexer.csproj" />
+    <Project Path="Indexer.Tests/Indexer.Tests.csproj" />
+    <Project Path="Indexer.IntegrationTests/Indexer.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

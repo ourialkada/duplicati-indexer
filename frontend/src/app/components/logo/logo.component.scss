@@ -1,0 +1,36 @@
+@use '@ship-ui/core/styles/helpers' as *;
+
+:host {
+  display: inline-block;
+  width: auto;
+  height: p2r(32);
+
+  > * {
+    height: 100%;
+    width: auto;
+  }
+}
+
+.custom-logo-container {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: p2r(8);
+
+  .logo-image {
+    height: p2r(32);
+    width: auto;
+    margin-right: p2r(8);
+  }
+
+  .logo-text {
+    font-size: p2r(20);
+    font-weight: bold;
+  }
+
+  .logo-subtext {
+    font-size: p2r(12);
+    color: var(--base-9);
+  }
+}

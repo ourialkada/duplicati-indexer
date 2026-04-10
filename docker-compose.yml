@@ -1,0 +1,184 @@
+services:
+  indexer:
+    build:
+      context: .
+      dockerfile: Indexer/Dockerfile
+    container_name: duplicati-indexer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      unstructured:
+        condition: service_started
+      ollama:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      chroma:
+        condition: service_started
+    environment:
+      - DOTNET_ENVIRONMENT=${DOTNET_ENVIRONMENT:-Production}
+      - LOGGING__LOGLEVEL__DEFAULT=${LOG_LEVEL:-Information}
+      - CONNECTIONSTRINGS__DOCUMENTSTORE=Host=postgres;Port=5432;Database=duplicati_indexer;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
+      - CONNECTIONSTRINGS__MESSAGESTORE=Host=postgres;Port=5432;Database=duplicati_indexer;Username=postgres;Password=${POSTGRES_PASSWORD:-postgres}
+      - CONNECTIONSTRINGS__QDRANT=http://qdrant:6334
+      - CONNECTIONSTRINGS__CHROMA=http://chroma:8000
+      - VECTORSTORE__PROVIDER=${VECTORSTORE_PROVIDER:-qdrant}
+      - VECTORSTORE__COLLECTIONNAME=${VECTORSTORE_COLLECTION:-backup_content}
+      - UNSTRUCTURED__BASEURL=http://unstructured:8000
+      - OLLAMAEMBED__BASEURL=http://ollama:11434
+      - OLLAMAEMBED__MODEL=${OLLAMAEMBED_MODEL:-nomic-embed-text}
+      - LLM__PROVIDER=${LLM_PROVIDER:-Gemini}
+      - EMBED__PROVIDER=${EMBED_PROVIDER:-ollama}
+      - LMSTUDIO__BASEURL=${LMSTUDIO_BASEURL:-http://host.docker.internal:1234/v1}
+      - LMSTUDIO__MODEL=${LMSTUDIO_MODEL:-local-model}
+      - LMSTUDIO__EMBEDMODEL=${LMSTUDIO_EMBEDMODEL:-text-embedding-nomic-embed-text-v1.5}
+      - OLLAMALLM__BASEURL=http://ollama-llm:11434
+      - OLLAMALLM__MODEL=${OLLAMALLM_MODEL:-llama3.2}
+      - GEMINI__APIKEY=${GEMINI_API_KEY:-}
+      - GEMINI__MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - CHATGPT__APIKEY=${CHATGPT_API_KEY:-}
+      - CHATGPT__MODEL=${CHATGPT_MODEL:-gpt-4o-mini}
+      - CLAUDE__APIKEY=${CLAUDE_API_KEY:-}
+      - CLAUDE__MODEL=${CLAUDE_MODEL:-claude-3-5-sonnet-20241022}
+      - CLAUDE__MAXTOKENS=${CLAUDE_MAX_TOKENS:-1024}
+      - INDEXING__MAXFILESIZEBYTES=${MAX_FILE_SIZE:-104857600}
+      - INDEXING__FILEEXTENSIONFILTER=!.,.txt
+      - INDEXING__PROVIDER=${INDEXING_PROVIDER:-unstructured}
+      - MARKITDOWN__EXECUTABLEPATH=${MARKITDOWN_EXECUTABLEPATH:-markitdown}
+      - CHUNKING__MAXCHUNKSIZE=${CHUNKING_MAX_SIZE:-1024}
+      - CHUNKING__OVERLAPSIZE=${CHUNKING_OVERLAP:-50}
+      - CHUNKING__CHARSPERTOKEN=${CHUNKING_CHARS_PER_TOKEN:-4.0}
+      - RAGQUERY__VERSION=${RAGQUERY_VERSION:-v2}
+      - SECURITY__THREATMONITOR=${SECURITY_THREATMONITOR:-noop}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/indexer:/app/data
+      - ./testdata/backupdest:/backupdest
+    restart: unless-stopped
+
+  frontend:
+    image: node:24
+    container_name: indexer-frontend
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      indexer:
+        condition: service_started
+    command: /bin/sh -c "npm install && (npm run watch:font &) && npx ng serve --host 0.0.0.0 --port 4200 --poll 2000 --proxy-config proxy.conf.docker.json"
+    ports:
+      - "3000:4200"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: indexer-postgres
+    environment:
+      - POSTGRES_DB=duplicati_indexer
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d duplicati_indexer"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  qdrant:
+    image: qdrant/qdrant
+    container_name: indexer-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: indexer-chroma
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data/chroma:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
+      - CHROMA_SERVER_AUTH_PROVIDER=${CHROMA_AUTH_PROVIDER:-}
+      - CHROMA_SERVER_AUTH_CREDENTIALS=${CHROMA_AUTH_CREDENTIALS:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  unstructured:
+    image: quay.io/unstructured-io/unstructured-api:latest
+    container_name: indexer-unstructured
+    environment:
+      - UNSTRUCTURED_MEMORY_FREE_MINIMUM_MB=100
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: indexer-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./data/ollama:/root/.ollama
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama serve & sleep 5 && ollama pull nomic-embed-text && wait"]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q nomic-embed-text || exit 1"]
+      interval: 30s
+      timeout: 30s
+      retries: 10
+      start_period: 120s
+
+  # Local LLM service for chat models
+  # Supports any model via local:<model> format in LLM_PROVIDER
+  ollama-llm:
+    image: ollama/ollama:latest
+    container_name: indexer-ollama-llm
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-}
+    ports:
+      - "11435:11434"
+    volumes:
+      - ./data/ollama-llm:/root/.ollama
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      'case "$$LLM_PROVIDER" in
+        local:*) MODEL="$${LLM_PROVIDER#local:}"; echo "Starting Ollama LLM service with model: $$MODEL"; ollama serve & sleep 10 && ollama pull "$$MODEL" && wait ;;
+        ollama) echo "Starting Ollama LLM service with default model"; ollama serve & sleep 10 && ollama pull "$${OLLAMALLM_MODEL:-llama3.2}" && wait ;;
+        *) echo "LLM_PROVIDER is $$LLM_PROVIDER (not a local model). Exiting."; exit 0 ;;
+      esac'
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -qv 'NAME' || exit 1"]
+      interval: 30s
+      timeout: 30s
+      retries: 10
+      start_period: 180s

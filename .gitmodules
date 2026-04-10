@@ -1,0 +1,3 @@
+[submodule "modules/duplicati"]
+	path = modules/duplicati
+	url = https://github.com/duplicati/duplicati.git

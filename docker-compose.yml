@@ -132,7 +132,7 @@ services:
     environment:
       - UNSTRUCTURED_MEMORY_FREE_MINIMUM_MB=100
     ports:
-      - "8000:8000"
+      - "8034:8000"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthcheck"]
